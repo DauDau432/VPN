@@ -1,0 +1,190 @@
+name: Build VPN file
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * 0"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:   
+      - name: Get latest go version
+        id: version
+        run: |
+          echo ::set-output name=go_version::$(curl -s https://raw.githubusercontent.com/actions/go-versions/main/versions-manifest.json | grep -oE '"version": "[0-9]{1}.[0-9]{1,}(.[0-9]{1,})?"' | head -1 | cut -d':' -f2 | sed 's/ //g; s/"//g')
+      - name: Setup Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: ${{ steps.version.outputs.go_version }}
+      - name: Cache go module
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/go/pkg/mod
+          key: go-${{ hashFiles('**/go.sum') }}
+          
+      - name: Set variables
+        run: |
+          echo "RELEASE_NAME=Released on $(date +%Y%m%d%H%M)" >> $GITHUB_ENV
+          echo "TAG_NAME=$(date +%Y%m%d%H%M)" >> $GITHUB_ENV
+          echo "HOST_ADS_URL=https://raw.githubusercontent.com/bigdargon/hostsVN/master/option/domain.txt" >> $GITHUB_ENV
+        shell: bash
+        
+      - name: Checkout Qiu2zhi1zhe3/VPN
+        uses: actions/checkout@v3
+        with:
+          ref: VPN
+      - name: Checkout qjebbs/sing-box
+        uses: actions/checkout@v3
+        with:
+          repository: qjebbs/sing-box
+          path: sing-box
+
+      - name: Build SingBox file
+        run: |
+          cd sing-box || exit 1
+          GOARCH=arm64 GOOS=android CGO_ENABLED=0 go build -v -trimpath -tags "with_clash_api" -ldflags "-s -w -buildid=" -o ./bin/SingBox ./cmd/sing-box
+          cp ./bin/SingBox ../
+
+      - name: Checkout MetaCubeX/Clash.Meta
+        uses: actions/checkout@v3
+        with:
+          repository: MetaCubeX/Clash.Meta
+          ref: Alpha
+          path: Clash
+
+      - name: Build Clash.Meta file
+        run: |
+          cd Clash || exit 1
+          GOARCH=arm64 GOOS=android CGO_ENABLED=0 go build -tags "no_gvisor" -trimpath -ldflags '-X "github.com/Dreamacro/clash/constant.BuildTime=${{ env.TAG_NAME }}" -w -s -buildid=' -o ./bin/Clash.Meta
+          cp ./bin/Clash.Meta ../
+                    
+      - name: Get host file
+        run: |
+          mkdir -p ./build/
+          curl -sSL https://raw.githubusercontent.com/bigdargon/hostsVN/master/hosts | grep -v '#' | grep -v -e '^[[:space:]]*$' > ./build/hosts
+
+      - name: Create clash rule
+        run: |
+          echo 'payload:' > ./run/anti-ad.yaml 
+          cat ./build/hosts | awk '{print "  - \047+."$2"\047"}' >> ./run/anti-ad.yaml  
+          
+      - name: Checkout v2fly/domain-list-community
+        uses: actions/checkout@v3
+        with:
+          repository: v2fly/domain-list-community
+          path: custom
+                   
+      - name: Build geosite.dat file
+        run: |
+          cd custom || exit 1
+          rm -rf ./data
+          mkdir -p ./data
+          cat ../build/hosts | awk '{print $2}' > ./data/ads
+          go run ./ -outputname=geosite.dat -outputdir=../
+          
+      - name: Checkout Loyalsoldier/geoip
+        uses: actions/checkout@v3
+        with:
+          repository: Loyalsoldier/geoip
+          path: geoip
+                   
+      - name: Build geoip.dat file
+        run: |
+          cd geoip || exit 1
+          mkdir -p ./data
+          echo "1.0.1.5/32" > ./data/cn.txt
+          curl -sL https://raw.githubusercontent.com/Loyalsoldier/geoip/release/text/vn.txt -o ./data/vn.txt
+          cat << EOF > config.json
+          {
+            "input": [
+              {
+                "type": "text",
+                "action": "add",
+                "args": {
+                  "inputDir": "./data",
+                  "onlyIPType": "ipv4"
+                }
+              },
+              {
+                "type": "private",
+                "action": "add"
+              }
+            ],
+            "output": [
+              {
+                "type": "v2rayGeoIPDat",
+                "action": "output",
+                "args": {
+                  "outputName": "geoip.dat",
+                  "outputDir": "../",
+                  "wantedList": ["vn", "cn", "private"]
+                }
+              }
+            ]
+          }
+          EOF
+          go run -v .
+                    
+      - name: Checkout SagerNet/sing-geosite
+        uses: actions/checkout@v3
+        with:
+          repository: SagerNet/sing-geosite
+          path: sing-geosite
+
+      - name: Build geosite.db file
+        run: |
+          cd sing-geosite || exit 1
+          cp ../geosite.dat ./
+          sed -i '0,/func release/!d' main.go
+          sed -i 's/func release.*//g' main.go
+          cat << EOF >> main.go
+          func local(input string, output string) error {
+          	outputFile, err := os.Create(output)
+          	if err != nil {
+          		return err
+          		}
+          		defer outputFile.Close()
+          		binary, err := os.ReadFile(input)
+          		if err != nil {
+          			return err
+          			}
+          			domainMap, err := parse(binary)
+          			if err != nil {
+          				return err
+          				}
+          				outputPath, _ := filepath.Abs(output)
+          				os.Stderr.WriteString("write " + outputPath + "\n")
+          				return geosite.Write(outputFile, domainMap)
+          				}
+          				
+          				func main() {
+          					err := local(os.Args[1], os.Args[2])
+          					if err != nil {
+          						logrus.Fatal(err)
+          						}
+          }
+          EOF
+          go run -v . geosite.dat geosite.db
+          cp geosite.db ../run/geosite_vn.db
+      - name: Checkout SagerNet/sing-geoip
+        uses: actions/checkout@v3
+        with:
+          repository: SagerNet/sing-geoip
+          path: sing-geoip
+
+      - name: Build geoip.db file
+        env:
+          NO_SKIP: true
+        run: |
+          cd sing-geoip || exit 1
+          sed -i 's/Dreamacro\/maxmind-geoip/Loyalsoldier\/geoip/g' main.go
+          sed -i 's/cn/vn/g' main.go
+          go run -v .
+          cp geoip-vn.db ../run/geoip_vn.db
+          
+      - name: Git push "VPN" branch
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -a -m "${{ env.RELEASE_NAME }}"
+          git push
