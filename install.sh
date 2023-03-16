@@ -3,7 +3,7 @@ apt update
 apt install git tsu -y
 cd /data
 sudo rm -rf VPN
-sudo git clone -b VPN https://github.com/DauDau432/VPN
+sudo git clone -b VPN https://github.com/Qiu2zhi1zhe3/VPN
 sudo chmod -R 755 VPN
 sudo mkdir -p /data/adb/modules/VPN/system/bin/
 sudo ln -sf /data/VPN/start.sh /data/adb/modules/VPN/system/bin/vpn
