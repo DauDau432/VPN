@@ -1,4 +1,8 @@
 ### ***Cài đặt***
 ```
-bash <(curl -Ls https://raw.githubusercontent.com/DauDau432/VPN/main/install.sh)
+npm install request
+npm install fs
+```
+```
+node anal.js https://example.com "cookie_value" 60
 ```
